@@ -138,6 +138,64 @@ func TestUpdatingPoolInUseAddresses(t *testing.T) {
 	g.Expect(webhook.ValidateUpdate(ctx, oldGlobalPool, globalPool)).Error().To(HaveOccurred(), "should not allow removing in use IPs from addresses field in pool")
 }
 
+func TestUpdatingPoolReportsWhyInUseAddressIsUnavailable(t *testing.T) {
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	g.Expect(ipamv1.AddToScheme(scheme)).To(Succeed())
+
+	newPool := func() *v1alpha2.InClusterIPPool {
+		return &v1alpha2.InClusterIPPool{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "my-pool",
+			},
+			Spec: v1alpha2.InClusterIPPoolSpec{
+				Addresses: []string{"10.0.0.10-10.0.0.20"},
+				Prefix:    24,
+				Gateway:   "10.0.0.1",
+			},
+		}
+	}
+
+	t.Run("in-use address removed by an exclusion names the exclusion entry", func(t *testing.T) {
+		g := NewWithT(t)
+		oldPool := newPool()
+		pool := newPool()
+		pool.Spec.ExcludedAddresses = []string{"10.0.0.10"}
+
+		ip := createIP("my-ip", "10.0.0.10", pool)
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(ip).
+			WithIndex(&ipamv1.IPAddress{}, index.IPAddressPoolRefCombinedField, index.IPAddressByCombinedPoolRef).
+			Build()
+		webhook := InClusterIPPool{Client: fakeClient}
+
+		_, err := webhook.ValidateUpdate(ctx, oldPool, pool)
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring(`excludedAddresses entry "10.0.0.10"`))
+	})
+
+	t.Run("in-use address outside the addresses says so", func(t *testing.T) {
+		g := NewWithT(t)
+		oldPool := newPool()
+		pool := newPool()
+		pool.Spec.Addresses = []string{"10.0.0.15-10.0.0.20"}
+
+		ip := createIP("my-ip", "10.0.0.10", pool)
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(ip).
+			WithIndex(&ipamv1.IPAddress{}, index.IPAddressPoolRefCombinedField, index.IPAddressByCombinedPoolRef).
+			Build()
+		webhook := InClusterIPPool{Client: fakeClient}
+
+		_, err := webhook.ValidateUpdate(ctx, oldPool, pool)
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("not contained in the pool addresses"))
+	})
+}
+
 func TestDeleteSkip(t *testing.T) {
 	g := NewWithT(t)
 

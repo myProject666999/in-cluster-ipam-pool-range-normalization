@@ -18,7 +18,6 @@ package controllers
 
 import (
 	"context"
-	"net/netip"
 
 	"github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -194,25 +193,17 @@ func genericReconcile(ctx context.Context, c client.Client, pool pooltypes.Gener
 		return ctrl.Result{}, nil
 	}
 
-	poolIPSet, err := poolutil.PoolSpecToIPSet(pool.PoolSpec())
+	addressSet, err := poolutil.NormalizePoolSpec(pool.PoolSpec())
 	if err != nil {
 		return ctrl.Result{}, errors.Wrap(err, "failed to build ip set from pool spec")
 	}
 
-	poolCount := poolutil.IPSetCount(poolIPSet)
-	if pool.PoolSpec().Gateway != "" {
-		gatewayAddr, err := netip.ParseAddr(pool.PoolSpec().Gateway)
-		if err != nil {
-			return ctrl.Result{}, errors.Wrap(err, "failed to parse pool gateway")
-		}
-
-		if poolIPSet.Contains(gatewayAddr) {
-			poolCount--
-		}
-	}
+	// The normalized set already excludes the gateway, reserved addresses and
+	// excluded addresses exactly once; no further adjustment is needed here.
+	poolCount := addressSet.CountCappedInt()
 
 	free := poolCount - inUseCount
-	outOfRangeIPSet, err := poolutil.AddressesOutOfRangeIPSet(addressesInUse, poolIPSet)
+	outOfRangeIPSet, err := poolutil.AddressesOutOfRangeIPSet(addressesInUse, addressSet.IPSet())
 	if err != nil {
 		return ctrl.Result{}, errors.Wrap(err, "failed to build out of range ip set")
 	}

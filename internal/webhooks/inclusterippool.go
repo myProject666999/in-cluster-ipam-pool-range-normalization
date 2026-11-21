@@ -20,9 +20,11 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"strings"
 
 	"go4.org/netipx"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ipamv1 "sigs.k8s.io/cluster-api/api/ipam/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -108,20 +110,32 @@ func (webhook *InClusterIPPool) ValidateUpdate(ctx context.Context, oldPool, new
 		}
 		inUseBuilder.Add(ip)
 	}
-	newPoolIPSet, err := poolutil.PoolSpecToIPSet(newPool.PoolSpec())
+	newPoolAddressSet, err := poolutil.NormalizePoolSpec(newPool.PoolSpec())
 	if err != nil {
 		// these addresses are already validated, this shouldn't happen
 		return nil, apierrors.NewInternalError(err)
 	}
 
-	inUseBuilder.RemoveSet(newPoolIPSet)
+	inUseBuilder.RemoveSet(newPoolAddressSet.IPSet())
 	outOfRangeIPSet, err := inUseBuilder.IPSet()
 	if err != nil {
 		return nil, apierrors.NewInternalError(err)
 	}
 
 	if outOfRange := outOfRangeIPSet.Ranges(); len(outOfRange) > 0 {
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("pool addresses do not contain allocated addresses: %v", outOfRange))
+		// Point each out-of-range address at the specific pool input that
+		// makes it unavailable instead of reporting a bare "pool invalid".
+		reasons := sets.Set[string]{}
+		for _, address := range inUseAddresses {
+			ip, err := netip.ParseAddr(address.Spec.Address)
+			if err != nil {
+				continue
+			}
+			if reason, unavailable := newPoolAddressSet.ReasonUnavailable(ip); unavailable {
+				reasons.Insert(reason)
+			}
+		}
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("pool addresses do not contain allocated addresses: %v (%s)", outOfRange, strings.Join(sets.List(reasons), "; ")))
 	}
 
 	return nil, nil

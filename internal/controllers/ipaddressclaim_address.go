@@ -142,12 +142,12 @@ func (h *IPAddressClaimHandler) EnsureAddress(ctx context.Context, address *ipam
 			return nil, fmt.Errorf("failed to convert IPAddressList to IPSet: %w", err)
 		}
 
-		poolIPSet, err := poolutil.PoolSpecToIPSet(poolSpec)
+		addressSet, err := poolutil.NormalizePoolSpec(poolSpec)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert pool to range: %w", err)
 		}
 
-		freeIP, err := poolutil.FindFreeAddress(poolIPSet, inUseIPSet)
+		freeIP, err := addressSet.FindFree(inUseIPSet)
 		if err != nil {
 			return nil, fmt.Errorf("failed to find free address: %w", err)
 		}
